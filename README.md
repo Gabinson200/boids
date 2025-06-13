@@ -2,7 +2,7 @@
 
 This project is a real-time, interactive 3D simulation of a classic boids flocking algorithm, built with Three.js. It features advanced hand gesture controls powered by Google's MediaPipe Hand Landmarker, allowing users to influence the flock's behavior directly through their webcam.
 
-[**▶️ View the Live Demo Here**](https://github.com/Gabinson200/boids/)
+[**▶️ View the Live Demo Here**](https://github.com/Gabinson200/boids)
 
 ![Boids Simulation Screenshot](https://github.com/user-attachments/assets/ea65bfc1-5e1d-4c70-9a54-f221df9cf92d)
 
