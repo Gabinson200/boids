@@ -13,7 +13,19 @@ let hashGrid;
 let handLandmarker;
 let video;
 let attractor;
-let isPinching = false;
+let handState = {
+    handDetected: false,
+    isPinching: false,
+    isOpenPalm: false,
+    explosionTriggered: false,
+
+    // For locking the control reference frame
+    initialPinch: true,
+    initialHandPos: new THREE.Vector3(),
+    initialAttractorPos: new THREE.Vector3(),
+    cameraMatrixInverse: new THREE.Matrix4(),
+    initialCameraQuaternion: new THREE.Quaternion()
+};
 let lastVideoTime = -1;
 let debugCanvas, debugCtx, drawingUtils; 
 // [FIXED] Add raycaster and interaction plane for robust coordinate mapping
@@ -111,96 +123,92 @@ function predictWebcam() {
 }
 
 
+// --- script.js ---
+
 function processHandLandmarks(results) {
     debugCtx.save();
     debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
     if (results.landmarks) {
         for (const landmarks of results.landmarks) {
-            drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, {
-                color: "#00FF00",
-                lineWidth: 5
-            });
+            drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 5 });
             drawingUtils.drawLandmarks(landmarks, { color: "#FF0000", lineWidth: 2 });
         }
     }
     debugCtx.restore();
-    
-    if (results.landmarks && results.landmarks.length > 0) {
-        const landmarks = results.landmarks[0];
-        
-        const thumbTip = landmarks[4];
-        const indexTip = landmarks[8];
-        
-        const distance = Math.sqrt(
-            Math.pow(thumbTip.x - indexTip.x, 2) +
-            Math.pow(thumbTip.y - indexTip.y, 2) +
-            Math.pow(thumbTip.z - indexTip.z, 2)
-        );
 
-        const pinchThreshold = 0.05;
-        isPinching = distance < pinchThreshold;
-        
-        if (isPinching) {
-            // --- [NEW] Z-depth control logic ---
+    // Determine if a hand is detected in the current frame
+    handState.handDetected = results.landmarks && results.landmarks.length > 0;
+    attractor.visible = handState.handDetected;
 
-            // 1. Calculate apparent hand size for depth perception.
-            // We measure the 2D distance between the wrist and the middle finger knuckle.
-            const wrist = landmarks[0];
-            const middleFingerMCP = landmarks[9];
-            const dx = wrist.x - middleFingerMCP.x;
-            const dy = wrist.y - middleFingerMCP.y;
-            const handSize = Math.sqrt(dx * dx + dy * dy);
-
-            // 2. Map hand size to a distance from the camera.
-            // These values can be tweaked for better feel and responsiveness.
-            const minHandSize = 0.1;    // Represents hand being far away
-            const maxHandSize = 0.35;   // Represents hand being very close
-            const minDistance = 150;    // How far the attractor is at minHandSize
-            const maxDistance = 400;    // How close the attractor is at maxHandSize
-
-            // Map the size to a 0-1 ratio.
-            const distRatio = THREE.MathUtils.inverseLerp(minHandSize, maxHandSize, handSize);
-            // Lerp the distance, clamping the ratio to handle edge cases.
-            const distanceFromCamera = THREE.MathUtils.lerp(minDistance, maxDistance, THREE.MathUtils.clamp(distRatio, 0, 1));
-
-
-            // --- [MODIFIED] Use the new depth to position the interaction plane ---
-            const handX = (1 - thumbTip.x) * 2 - 1; 
-            const handY = -(thumbTip.y * 2) + 1;
-            
-            raycaster.setFromCamera({ x: handX, y: handY }, mainCamera);
-            const pos = new THREE.Vector3();
-
-            // Create an interaction plane at the new dynamic distance in front of the camera.
-            const planeNormal = mainCamera.getWorldDirection(new THREE.Vector3());
-            const planeOrigin = mainCamera.position.clone().add(planeNormal.clone().multiplyScalar(distanceFromCamera));
-            interactionPlane.setFromNormalAndCoplanarPoint(planeNormal, planeOrigin);
-            
-            raycaster.ray.intersectPlane(interactionPlane, pos);
-            
-            attractor.position.lerp(pos, 0.5);
-
-            // The existing color-changing logic will now work correctly with the new depth
-            const distanceToCameraColor = attractor.position.distanceTo(mainCamera.position);
-            const minColorDist = 100;
-            const maxColorDist = 400;
-            const depthRatioColor = THREE.MathUtils.clamp(
-                THREE.MathUtils.inverseLerp(minColorDist, maxColorDist, distanceToCameraColor),
-                0,
-                1
-            );
-            const closeColor = new THREE.Color(0xff4400);
-            const farColor = new THREE.Color(0x00aaff);
-            attractor.material.color.lerpColors(closeColor, farColor, depthRatioColor);
+    // If no hand is detected, reset all gesture states and return
+    if (!handState.handDetected) {
+        if (handState.isPinching || handState.isOpenPalm) {
+            console.log("DEBUG: Hand lost. Resetting gestures.");
         }
+        handState.isPinching = false;
+        handState.isOpenPalm = false;
+        handState.initialPinch = true; // Reset the reference frame lock for the next time a hand appears
+        return;
+    }
 
+    // --- If hand is detected, update its position and analyze gestures ---
+    const landmarks = results.landmarks[0];
+
+    // [MODIFIED] The attractor's position now follows the hand whenever it's visible.
+    // The reference frame logic is preserved.
+    const thumbTip = landmarks[4];
+    const handX = (1 - thumbTip.x) * 2 - 1; 
+    const handY = -(thumbTip.y * 2) + 1;
+
+    const wrist = landmarks[0];
+    const middleFingerMCP = landmarks[9];
+    const handSize = Math.sqrt(Math.pow(wrist.x - middleFingerMCP.x, 2) + Math.pow(wrist.y - middleFingerMCP.y, 2));
+    const minHandSize = 0.05, maxHandSize = 0.5, minDistance = 100, maxDistance = 1000;
+    const distRatio = THREE.MathUtils.inverseLerp(minHandSize, maxHandSize, handSize);
+    const distanceFromCamera = THREE.MathUtils.lerp(minDistance, maxDistance, THREE.MathUtils.clamp(distRatio, 0, 1));
+    
+    raycaster.setFromCamera({ x: handX, y: handY }, mainCamera);
+    const planeNormal = mainCamera.getWorldDirection(new THREE.Vector3());
+    const planeOrigin = mainCamera.position.clone().add(planeNormal.clone().multiplyScalar(distanceFromCamera));
+    interactionPlane.setFromNormalAndCoplanarPoint(planeNormal, planeOrigin);
+    const currentHandPos = new THREE.Vector3();
+    raycaster.ray.intersectPlane(interactionPlane, currentHandPos);
+
+    if (handState.initialPinch) { // This flag is true when a new "session" of control starts
+        console.log("DEBUG: New hand control session. Setting reference frame.");
+        handState.initialPinch = false;
+        attractor.position.copy(currentHandPos);
+        handState.initialHandPos.copy(currentHandPos);
+        handState.initialAttractorPos.copy(attractor.position);
+        handState.cameraMatrixInverse.copy(mainCamera.matrixWorld).invert();
+        handState.initialCameraQuaternion.copy(mainCamera.quaternion);
     } else {
-        isPinching = false;
+        const currentHandLocal = currentHandPos.clone().applyMatrix4(handState.cameraMatrixInverse);
+        const initialHandLocal = handState.initialHandPos.clone().applyMatrix4(handState.cameraMatrixInverse);
+        const deltaLocal = currentHandLocal.sub(initialHandLocal);
+        const deltaWorld = deltaLocal.clone().applyQuaternion(handState.initialCameraQuaternion);
+        const newPos = handState.initialAttractorPos.clone().add(deltaWorld);
+        attractor.position.lerp(newPos, 0.5);
     }
     
-    attractor.visible = isPinching;
-}
+    // --- GESTURE ANALYSIS ---
+    // 1. Pinch Gesture (for attraction)
+    const indexTip = landmarks[8];
+    const pinchDistance = Math.sqrt(Math.pow(thumbTip.x - indexTip.x, 2) + Math.pow(thumbTip.y - indexTip.y, 2));
+    handState.isPinching = pinchDistance < 0.05;
 
+    // 2. Open Palm Gesture (for explosion)
+    const pinkyTip = landmarks[20];
+    const thumbPinkyDist = Math.sqrt(Math.pow(thumbTip.x - pinkyTip.x, 2) + Math.pow(thumbTip.y - pinkyTip.y, 2));
+    const wasOpen = handState.isOpenPalm;
+    handState.isOpenPalm = thumbPinkyDist > 0.25; // Heuristic for a spread hand
+
+    // Trigger explosion only on the frame the gesture becomes active (rising edge)
+    if (handState.isOpenPalm && !wasOpen) {
+        console.log("DEBUG: Open palm detected. Triggering explosion!");
+        handState.explosionTriggered = true;
+    }
+}
 
 // --- OPTIMIZATION: HASH GRID CLASS ---
 class HashGrid {
@@ -326,7 +334,7 @@ class Boid {
             this.applyForce(steer.multiplyScalar(boidParams.separationForce));
         }
 
-        if (isPinching) {
+        if (handState.isPinching) {
             const attractorPos = attractor.position;
             const desired = new THREE.Vector3().subVectors(attractorPos, this.position);
             const d = desired.length();
@@ -335,6 +343,24 @@ class Boid {
                 const steer = new THREE.Vector3().subVectors(desired, this.velocity);
                 steer.clampLength(0, boidParams.maxForce);
                 this.applyForce(steer.multiplyScalar(boidParams.attractorForce));
+            }
+        }
+
+        if (handState.explosionTriggered) {
+            const explosionPos = attractor.position;
+            const dist = this.position.distanceTo(explosionPos);
+            const explosionRadius = 200; // The radius of the explosion effect
+
+            if (dist < explosionRadius && dist > 0) {
+                // Calculate a powerful repulsive force
+                const repulsion = new THREE.Vector3().subVectors(this.position, explosionPos);
+                
+                // The force is stronger for boids closer to the center of the explosion
+                const falloff = 1 - (dist / explosionRadius);
+                const repulsionStrength = boidParams.maxForce * 1000 * falloff; // Much stronger than normal forces
+
+                repulsion.setLength(repulsionStrength);
+                this.applyForce(repulsion);
             }
         }
     }
@@ -511,6 +537,11 @@ function animate() {
             boid.flock(neighbors);
         });
         
+        // [NEW] Reset the one-shot explosion trigger after all boids have processed it for one frame
+        if (handState.explosionTriggered) {
+            handState.explosionTriggered = false;
+        }
+
         boids.forEach((boid, i) => {
             boid.update();
             dummy.position.copy(boid.position);
