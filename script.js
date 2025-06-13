@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-// [MODIFIED] Added DrawingUtils for visualization
 import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://esm.sh/@mediapipe/tasks-vision@0.10.10";
 
 // --- GLOBAL STATE ---
@@ -16,7 +15,7 @@ let attractor;
 let handState = {
     handDetected: false,
     isPinching: false,
-    isOpenPalm: false,
+    isPinkyExtended: false,
     explosionTriggered: false,
 
     // For locking the control reference frame
@@ -27,8 +26,7 @@ let handState = {
     initialCameraQuaternion: new THREE.Quaternion()
 };
 let lastVideoTime = -1;
-let debugCanvas, debugCtx, drawingUtils; 
-// [FIXED] Add raycaster and interaction plane for robust coordinate mapping
+let debugCanvas, debugCtx, drawingUtils;
 const raycaster = new THREE.Raycaster();
 const interactionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
@@ -80,7 +78,6 @@ async function setupHandTracking() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = stream;
-        // [FIXED] Add an event listener to start prediction only when the video is playing
         video.addEventListener("loadeddata", predictWebcam);
         return new Promise((resolve) => {
             video.onloadedmetadata = () => {
@@ -102,7 +99,6 @@ async function setupHandTracking() {
 }
 
 function predictWebcam() {
-    // [FIXED] Restructured the prediction loop for continuous processing
     if (!video.videoWidth) {
       requestAnimationFrame(predictWebcam);
       return;
@@ -113,17 +109,13 @@ function predictWebcam() {
         if (lastVideoTime !== video.currentTime) {
             lastVideoTime = video.currentTime;
             const results = handLandmarker.detectForVideo(video, startTimeMs);
-             // Process the results
             processHandLandmarks(results);
         }
     }
    
-    // Continue the loop
     window.requestAnimationFrame(predictWebcam);
 }
 
-
-// --- script.js ---
 
 function processHandLandmarks(results) {
     debugCtx.save();
@@ -136,26 +128,20 @@ function processHandLandmarks(results) {
     }
     debugCtx.restore();
 
-    // Determine if a hand is detected in the current frame
     handState.handDetected = results.landmarks && results.landmarks.length > 0;
     attractor.visible = handState.handDetected;
 
-    // If no hand is detected, reset all gesture states and return
     if (!handState.handDetected) {
-        if (handState.isPinching || handState.isOpenPalm) {
+        if (handState.isPinching || handState.isPinkyExtended) {
             console.log("DEBUG: Hand lost. Resetting gestures.");
         }
         handState.isPinching = false;
-        handState.isOpenPalm = false;
-        handState.initialPinch = true; // Reset the reference frame lock for the next time a hand appears
+        handState.isPinkyExtended = false;
+        handState.initialPinch = true;
         return;
     }
 
-    // --- If hand is detected, update its position and analyze gestures ---
     const landmarks = results.landmarks[0];
-
-    // [MODIFIED] The attractor's position now follows the hand whenever it's visible.
-    // The reference frame logic is preserved.
     const thumbTip = landmarks[4];
     const handX = (1 - thumbTip.x) * 2 - 1; 
     const handY = -(thumbTip.y * 2) + 1;
@@ -163,7 +149,7 @@ function processHandLandmarks(results) {
     const wrist = landmarks[0];
     const middleFingerMCP = landmarks[9];
     const handSize = Math.sqrt(Math.pow(wrist.x - middleFingerMCP.x, 2) + Math.pow(wrist.y - middleFingerMCP.y, 2));
-    const minHandSize = 0.05, maxHandSize = 0.5, minDistance = 100, maxDistance = 1000;
+    const minHandSize = 0.1, maxHandSize = 0.35, minDistance = 150, maxDistance = 400;
     const distRatio = THREE.MathUtils.inverseLerp(minHandSize, maxHandSize, handSize);
     const distanceFromCamera = THREE.MathUtils.lerp(minDistance, maxDistance, THREE.MathUtils.clamp(distRatio, 0, 1));
     
@@ -174,7 +160,7 @@ function processHandLandmarks(results) {
     const currentHandPos = new THREE.Vector3();
     raycaster.ray.intersectPlane(interactionPlane, currentHandPos);
 
-    if (handState.initialPinch) { // This flag is true when a new "session" of control starts
+    if (handState.initialPinch) {
         console.log("DEBUG: New hand control session. Setting reference frame.");
         handState.initialPinch = false;
         attractor.position.copy(currentHandPos);
@@ -197,18 +183,20 @@ function processHandLandmarks(results) {
     const pinchDistance = Math.sqrt(Math.pow(thumbTip.x - indexTip.x, 2) + Math.pow(thumbTip.y - indexTip.y, 2));
     handState.isPinching = pinchDistance < 0.05;
 
-    // 2. Open Palm Gesture (for explosion)
+    // 2. Extended Pinky Gesture (for explosion)
     const pinkyTip = landmarks[20];
-    const thumbPinkyDist = Math.sqrt(Math.pow(thumbTip.x - pinkyTip.x, 2) + Math.pow(thumbTip.y - pinkyTip.y, 2));
-    const wasOpen = handState.isOpenPalm;
-    handState.isOpenPalm = thumbPinkyDist > 0.25; // Heuristic for a spread hand
+    const pinkyBase = landmarks[17];
+    const pinkyRingDist = Math.sqrt(Math.pow(pinkyTip.x - pinkyBase.x, 2) + Math.pow(pinkyTip.y - pinkyBase.y, 2));
+    
+    const wasExtended = handState.isPinkyExtended;
+    handState.isPinkyExtended = pinkyRingDist > 0.08; 
 
-    // Trigger explosion only on the frame the gesture becomes active (rising edge)
-    if (handState.isOpenPalm && !wasOpen) {
-        console.log("DEBUG: Open palm detected. Triggering explosion!");
+    if (handState.isPinkyExtended && !wasExtended) {
+        console.log("DEBUG: Extended pinky detected. Triggering explosion!");
         handState.explosionTriggered = true;
     }
 }
+
 
 // --- OPTIMIZATION: HASH GRID CLASS ---
 class HashGrid {
@@ -276,16 +264,26 @@ class Boid {
             THREE.MathUtils.randFloatSpread(2)
         ).setLength(THREE.MathUtils.randFloat(boidParams.minSpeed, boidParams.maxSpeed));
         this.acceleration = new THREE.Vector3();
+
+        // [OPTIMIZATION] Pre-allocate vectors for calculations to avoid garbage collection
+        this._cohesionVec = new THREE.Vector3();
+        this._separationVec = new THREE.Vector3();
+        this._alignmentVec = new THREE.Vector3();
+        this._steerVec = new THREE.Vector3();
+        this._tempVec = new THREE.Vector3();
     }
 
     applyForce(force) {
         this.acceleration.add(force);
     }
     
+    // [OPTIMIZATION] Rewritten flock method using object pooling to reduce memory allocation
     flock(boidsInVicinity) {
-        const separation = new THREE.Vector3();
-        const alignment = new THREE.Vector3();
-        const cohesion = new THREE.Vector3();
+        // Reset reusable vectors
+        this._cohesionVec.set(0, 0, 0);
+        this._separationVec.set(0, 0, 0);
+        this._alignmentVec.set(0, 0, 0);
+
         let separationCount = 0;
         let alignmentCount = 0;
         let cohesionCount = 0;
@@ -295,72 +293,68 @@ class Boid {
             const d = this.position.distanceTo(other.position);
 
             if (d > 0 && d < boidParams.visualRange) {
-                cohesion.add(other.position);
+                this._cohesionVec.add(other.position);
                 cohesionCount++;
-                alignment.add(other.velocity);
+                this._alignmentVec.add(other.velocity);
                 alignmentCount++;
             }
 
             if (d > 0 && d < boidParams.protectedRange) {
-                const diff = new THREE.Vector3().subVectors(this.position, other.position);
-                diff.divideScalar(d * d);
-                separation.add(diff);
+                this._tempVec.subVectors(this.position, other.position);
+                this._tempVec.divideScalar(d * d);
+                this._separationVec.add(this._tempVec);
                 separationCount++;
             }
         }
         
         if (cohesionCount > 0) {
-            cohesion.divideScalar(cohesionCount);
-            const desired = new THREE.Vector3().subVectors(cohesion, this.position);
-            desired.setLength(boidParams.maxSpeed);
-            const steer = new THREE.Vector3().subVectors(desired, this.velocity);
-            steer.clampLength(0, boidParams.maxForce);
-            this.applyForce(steer.multiplyScalar(boidParams.cohesionForce));
+            this._cohesionVec.divideScalar(cohesionCount);
+            this._tempVec.subVectors(this._cohesionVec, this.position);
+            this._tempVec.setLength(boidParams.maxSpeed);
+            this._steerVec.subVectors(this._tempVec, this.velocity);
+            this._steerVec.clampLength(0, boidParams.maxForce);
+            this.applyForce(this._steerVec.multiplyScalar(boidParams.cohesionForce));
         }
 
         if (alignmentCount > 0) {
-            alignment.divideScalar(alignmentCount);
-            alignment.setLength(boidParams.maxSpeed);
-            const steer = new THREE.Vector3().subVectors(alignment, this.velocity);
-            steer.clampLength(0, boidParams.maxForce);
-            this.applyForce(steer.multiplyScalar(boidParams.alignmentForce));
+            this._alignmentVec.divideScalar(alignmentCount);
+            this._alignmentVec.setLength(boidParams.maxSpeed);
+            this._steerVec.subVectors(this._alignmentVec, this.velocity);
+            this._steerVec.clampLength(0, boidParams.maxForce);
+            this.applyForce(this._steerVec.multiplyScalar(boidParams.alignmentForce));
         }
 
         if (separationCount > 0) {
-            separation.divideScalar(separationCount);
-            separation.setLength(boidParams.maxSpeed);
-            const steer = new THREE.Vector3().subVectors(separation, this.velocity);
-            steer.clampLength(0, boidParams.maxForce);
-            this.applyForce(steer.multiplyScalar(boidParams.separationForce));
+            this._separationVec.divideScalar(separationCount);
+            this._separationVec.setLength(boidParams.maxSpeed);
+            this._steerVec.subVectors(this._separationVec, this.velocity);
+            this._steerVec.clampLength(0, boidParams.maxForce);
+            this.applyForce(this._steerVec.multiplyScalar(boidParams.separationForce));
         }
 
         if (handState.isPinching) {
             const attractorPos = attractor.position;
-            const desired = new THREE.Vector3().subVectors(attractorPos, this.position);
-            const d = desired.length();
+            this._tempVec.subVectors(attractorPos, this.position);
+            const d = this._tempVec.length();
             if (d < boidParams.visualRange * 2) {
-                desired.setLength(boidParams.maxSpeed);
-                const steer = new THREE.Vector3().subVectors(desired, this.velocity);
-                steer.clampLength(0, boidParams.maxForce);
-                this.applyForce(steer.multiplyScalar(boidParams.attractorForce));
+                this._tempVec.setLength(boidParams.maxSpeed);
+                this._steerVec.subVectors(this._tempVec, this.velocity);
+                this._steerVec.clampLength(0, boidParams.maxForce);
+                this.applyForce(this._steerVec.multiplyScalar(boidParams.attractorForce));
             }
         }
 
         if (handState.explosionTriggered) {
             const explosionPos = attractor.position;
             const dist = this.position.distanceTo(explosionPos);
-            const explosionRadius = 200; // The radius of the explosion effect
+            const explosionRadius = 150;
 
             if (dist < explosionRadius && dist > 0) {
-                // Calculate a powerful repulsive force
-                const repulsion = new THREE.Vector3().subVectors(this.position, explosionPos);
-                
-                // The force is stronger for boids closer to the center of the explosion
+                this._tempVec.subVectors(this.position, explosionPos);
                 const falloff = 1 - (dist / explosionRadius);
-                const repulsionStrength = boidParams.maxForce * 1000 * falloff; // Much stronger than normal forces
-
-                repulsion.setLength(repulsionStrength);
-                this.applyForce(repulsion);
+                const repulsionStrength = boidParams.maxForce * 1000 * falloff; 
+                this._tempVec.setLength(repulsionStrength);
+                this.applyForce(this._tempVec);
             }
         }
     }
@@ -396,7 +390,8 @@ async function init() {
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    // [OPTIMIZATION] Cap the pixel ratio for better performance on high-DPI screens
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setClearColor(0x000000, 0);
     canvasContainer.appendChild(renderer.domElement);
     
@@ -423,9 +418,7 @@ async function init() {
     
     initUI();
 
-    // [MODIFIED] Increased geometry segments for a smoother sphere
     const attractorGeometry = new THREE.SphereGeometry(8, 32, 32);
-    // [MODIFIED] Switched to MeshStandardMaterial for realistic 3D shading
     const attractorMaterial = new THREE.MeshStandardMaterial({
         color: 0x00ffaa,
         roughness: 0.2,
@@ -537,7 +530,6 @@ function animate() {
             boid.flock(neighbors);
         });
         
-        // [NEW] Reset the one-shot explosion trigger after all boids have processed it for one frame
         if (handState.explosionTriggered) {
             handState.explosionTriggered = false;
         }
