@@ -141,20 +141,57 @@ function processHandLandmarks(results) {
         isPinching = distance < pinchThreshold;
         
         if (isPinching) {
-            console.log("DEBUG: Pinch detected!");
-            // [FIXED] Corrected coordinate mapping for mirrored webcam view.
+            // --- [NEW] Z-depth control logic ---
+
+            // 1. Calculate apparent hand size for depth perception.
+            // We measure the 2D distance between the wrist and the middle finger knuckle.
+            const wrist = landmarks[0];
+            const middleFingerMCP = landmarks[9];
+            const dx = wrist.x - middleFingerMCP.x;
+            const dy = wrist.y - middleFingerMCP.y;
+            const handSize = Math.sqrt(dx * dx + dy * dy);
+
+            // 2. Map hand size to a distance from the camera.
+            // These values can be tweaked for better feel and responsiveness.
+            const minHandSize = 0.1;    // Represents hand being far away
+            const maxHandSize = 0.35;   // Represents hand being very close
+            const minDistance = 150;    // How far the attractor is at minHandSize
+            const maxDistance = 400;    // How close the attractor is at maxHandSize
+
+            // Map the size to a 0-1 ratio.
+            const distRatio = THREE.MathUtils.inverseLerp(minHandSize, maxHandSize, handSize);
+            // Lerp the distance, clamping the ratio to handle edge cases.
+            const distanceFromCamera = THREE.MathUtils.lerp(minDistance, maxDistance, THREE.MathUtils.clamp(distRatio, 0, 1));
+
+
+            // --- [MODIFIED] Use the new depth to position the interaction plane ---
             const handX = (1 - thumbTip.x) * 2 - 1; 
             const handY = -(thumbTip.y * 2) + 1;
             
-            // [FIXED] Replaced fragile projection logic with robust raycaster method.
             raycaster.setFromCamera({ x: handX, y: handY }, mainCamera);
             const pos = new THREE.Vector3();
-            // Project onto a plane that is facing the camera, at the world origin
-            interactionPlane.set(new THREE.Vector3(0,0,-1).applyQuaternion(mainCamera.quaternion), 0);
+
+            // Create an interaction plane at the new dynamic distance in front of the camera.
+            const planeNormal = mainCamera.getWorldDirection(new THREE.Vector3());
+            const planeOrigin = mainCamera.position.clone().add(planeNormal.clone().multiplyScalar(distanceFromCamera));
+            interactionPlane.setFromNormalAndCoplanarPoint(planeNormal, planeOrigin);
+            
             raycaster.ray.intersectPlane(interactionPlane, pos);
             
             attractor.position.lerp(pos, 0.5);
-            console.log("DEBUG: Attractor moved to:", pos.x.toFixed(2), pos.y.toFixed(2), pos.z.toFixed(2));
+
+            // The existing color-changing logic will now work correctly with the new depth
+            const distanceToCameraColor = attractor.position.distanceTo(mainCamera.position);
+            const minColorDist = 100;
+            const maxColorDist = 400;
+            const depthRatioColor = THREE.MathUtils.clamp(
+                THREE.MathUtils.inverseLerp(minColorDist, maxColorDist, distanceToCameraColor),
+                0,
+                1
+            );
+            const closeColor = new THREE.Color(0xff4400);
+            const farColor = new THREE.Color(0x00aaff);
+            attractor.material.color.lerpColors(closeColor, farColor, depthRatioColor);
         }
 
     } else {
@@ -162,7 +199,6 @@ function processHandLandmarks(results) {
     }
     
     attractor.visible = isPinching;
-    attractor.material.color.set(isPinching ? 0xffaa00 : 0x00ffaa);
 }
 
 
@@ -361,8 +397,16 @@ async function init() {
     
     initUI();
 
-    const attractorGeometry = new THREE.SphereGeometry(8, 16, 16);
-    const attractorMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.7 });
+    // [MODIFIED] Increased geometry segments for a smoother sphere
+    const attractorGeometry = new THREE.SphereGeometry(8, 32, 32);
+    // [MODIFIED] Switched to MeshStandardMaterial for realistic 3D shading
+    const attractorMaterial = new THREE.MeshStandardMaterial({
+        color: 0x00ffaa,
+        roughness: 0.2,
+        metalness: 0.9,
+        transparent: true,
+        opacity: 0.8
+    });
     attractor = new THREE.Mesh(attractorGeometry, attractorMaterial);
     attractor.visible = false;
     scene.add(attractor);
@@ -382,8 +426,6 @@ async function init() {
         boids.push(new Boid());
     }
 
-    // [MODIFIED] Call setupHandTracking without awaiting it here, 
-    // as it now handles its own async flow and starts prediction via an event listener.
     try {
         setupHandTracking();
         console.log("DEBUG: Hand tracking setup initiated.");
