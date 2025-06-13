@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Boids Simulation with Hand Interaction</title>
+    
+    <!-- External Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Tailwind CSS and Fonts -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Import Map for Three.js Modules -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-900 text-white">
+
+    <!-- Main 3D Scene Container -->
+    <div id="canvas-container" class="absolute top-0 left-0 w-full h-full"></div>
+    
+    <!-- Webcam and Debugging Canvas Container -->
+    <!-- [MODIFIED] Added a container and a canvas for drawing hand landmarks -->
+    <div id="webcam-container" class="absolute top-0 right-0 w-48 h-36 opacity-75">
+        <video id="webcam" class="absolute top-0 left-0 w-full h-full" autoplay playsinline style="transform: scaleX(-1);"></video>
+        <canvas id="debug-canvas" class="absolute top-0 left-0 w-full h-full"></canvas>
+    </div>
+
+    <!-- UI Elements -->
+    <div class="absolute top-0 left-0 p-4 h-full" style="pointer-events: none;">
+        <!-- Control Panel -->
+        <div id="control-panel" class="control-panel absolute top-0 left-0 h-full bg-gray-800 bg-opacity-80 backdrop-blur-md rounded-r-lg p-6 w-80 overflow-y-auto" style="pointer-events: auto;">
+            <h2 class="text-2xl font-bold mb-6 text-center">Boid Controls</h2>
+
+            <!-- Simulation Controls -->
+            <div class="flex justify-center space-x-4 mb-6">
+                <button id="pause-button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                    Pause
+                </button>
+            </div>
+            
+            <div class="text-center mb-4 p-2 bg-gray-700 rounded-lg">
+                <p class="text-sm">Pinch your thumb and index finger in front of the webcam to create an attractor.</p>
+            </div>
+
+            <!-- Parameters -->
+            <div class="space-y-6">
+                <!-- Boid Count -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Number of Boids</h4>
+                                <p>Total number of boids in the simulation. More boids will be more computationally intensive. The simulation will reload to apply this change.</p>
+                            </div>
+                        </div>
+                        <label for="boid-count" class="block font-medium">Boid Count (<span id="boid-count-value">500</span>)</label>
+                    </div>
+                    <input id="boid-count" type="range" min="10" max="2000" value="500" step="10" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+                 <!-- Attractor Force -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Attractor Force</h4>
+                                <p>The strength of the pull from the virtual attractor when you pinch. Higher values will make the boids converge more quickly.</p>
+                            </div>
+                        </div>
+                        <label for="attractor-force" class="block font-medium">Attractor Force (<span id="attractor-force-value">0.8</span>)</label>
+                    </div>
+                    <input id="attractor-force" type="range" min="0" max="2" value="0.8" step="0.1" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- Cohesion -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Cohesion Force</h4>
+                                <p>The steering force that moves a boid toward the average position (center of mass) of its neighbors. Higher values result in tighter, more clumped flocks.</p>
+                            </div>
+                        </div>
+                        <label for="cohesion" class="block font-medium">Cohesion Force (<span id="cohesion-value">0.2</span>)</label>
+                    </div>
+                    <input id="cohesion" type="range" min="0" max="1" value="0.2" step="0.01" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- Separation -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Separation Force</h4>
+                                <p>The force that steers a boid away from its very close neighbors to avoid collisions. Higher values create more personal space between boids.</p>
+                            </div>
+                        </div>
+                        <label for="separation" class="block font-medium">Separation Force (<span id="separation-value">1.5</span>)</label>
+                    </div>
+                    <input id="separation" type="range" min="0" max="5" value="1.5" step="0.1" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- Alignment -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Alignment Force</h4>
+                                <p>The force that steers a boid toward the average heading (velocity) of its neighbors. Higher values lead to more synchronized and parallel movement within the flock.</p>
+                            </div>
+                        </div>
+                        <label for="alignment" class="block font-medium">Alignment Force (<span id="alignment-value">0.5</span>)</label>
+                    </div>
+                    <input id="alignment" type="range" min="0" max="1" value="0.5" step="0.01" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- Visual Range -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Visual Range</h4>
+                                <p>The radius around a boid within which it considers other boids for alignment and cohesion. A larger range leads to more global flocking behavior.</p>
+                            </div>
+                        </div>
+                        <label for="visual-range" class="block font-medium">Visual Range (<span id="visual-range-value">50</span>)</label>
+                    </div>
+                    <input id="visual-range" type="range" min="10" max="200" value="50" step="1" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+                
+                 <!-- Protected Range -->
+                <div>
+                    <div class="flex items-center mb-2">
+                        <div class="info-icon relative mr-2">
+                            i
+                            <div class="tooltip bg-gray-700 text-white text-sm rounded-lg py-2 px-3 shadow-lg">
+                                <h4 class="font-bold mb-1">Protected Range</h4>
+                                <p>The small radius around a boid for the separation rule. If another boid enters this range, a strong repulsive force is applied. Must be less than Visual Range.</p>
+                            </div>
+                        </div>
+                        <label for="protected-range" class="block font-medium">Protected Range (<span id="protected-range-value">10</span>)</label>
+                    </div>
+                    <input id="protected-range" type="range" min="1" max="50" value="10" step="1" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+            </div>
+        </div>
+
+        <!-- Collapse/Expand Button -->
+        <button id="collapse-button" class="absolute top-1/2 -translate-y-1/2 bg-gray-700 hover:bg-gray-600 p-2 rounded-r-lg" style="left: 320px; transition: left 0.3s ease-in-out; pointer-events: auto;">
+            &lt;
+        </button>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading-overlay" class="absolute top-0 left-0 w-full h-full bg-gray-900 flex items-center justify-center z-50">
+        <p id="loading-text" class="text-2xl font-semibold animate-pulse">Initializing 3D Simulation...</p>
+    </div>
+
+    <!-- External JavaScript Module -->
+    <script type="module" src="script.js"></script>
+
+</body>
+</html>

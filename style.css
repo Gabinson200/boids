@@ -1,0 +1,56 @@
+body {
+    font-family: 'Inter', sans-serif;
+    overflow: hidden; /* Prevent scrollbars from main page */
+}
+
+#main-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.control-panel {
+    transition: transform 0.3s ease-in-out;
+}
+
+.control-panel.collapsed {
+    transform: translateX(-100%);
+}
+
+.tooltip {
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.3s, visibility 0.3s;
+    position: absolute;
+    /* Position tooltip to the right of the icon and vertically centered. */
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 10px; /* Add space between icon and tooltip */
+    width: 250px;
+    z-index: 100;
+}
+
+/* New icon styles */
+.info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: #4A5568; /* gray-700 */
+    color: #E2E8F0; /* gray-300 */
+    font-size: 12px;
+    font-weight: bold;
+    font-style: normal;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+}
+
+/* New hover trigger for the tooltip */
+.info-icon:hover .tooltip {
+    visibility: visible;
+    opacity: 1;
+}
