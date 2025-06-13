@@ -43,4 +43,4 @@ This project is a real-time, interactive 3D simulation of a classic boids flocki
 
 ## Future Work
 
-The goal of this website was to familiarize myself with boids so that I can create more robust code that utlizies boids to inform a bird flock counting computer vision algorithm. 
+The goal of this website was to familiarize myself with boids so that I can create more robust code that utilizes boids to inform a bird flock counting computer vision algorithm. 
