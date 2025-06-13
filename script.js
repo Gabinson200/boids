@@ -177,19 +177,36 @@ function processHandLandmarks(results) {
         attractor.position.lerp(newPos, 0.5);
     }
     
+    // [NEW] Add logic to change attractor color based on its depth
+    const distanceToCameraColor = attractor.position.distanceTo(mainCamera.position);
+    const minColorDist = 100;
+    const maxColorDist = 400;
+    const depthRatioColor = THREE.MathUtils.clamp(
+        THREE.MathUtils.inverseLerp(minColorDist, maxColorDist, distanceToCameraColor),
+        0,
+        1
+    );
+    const closeColor = new THREE.Color(0xff4400); // Hot red/orange
+    const farColor = new THREE.Color(0x00aaff);   // Cool blue
+    attractor.material.color.lerpColors(closeColor, farColor, depthRatioColor);
+
     // --- GESTURE ANALYSIS ---
     // 1. Pinch Gesture (for attraction)
     const indexTip = landmarks[8];
     const pinchDistance = Math.sqrt(Math.pow(thumbTip.x - indexTip.x, 2) + Math.pow(thumbTip.y - indexTip.y, 2));
     handState.isPinching = pinchDistance < 0.05;
 
-    // 2. Extended Pinky Gesture (for explosion)
+    // 2. [FIXED] Extended Pinky Gesture using normalized distance for robust detection
     const pinkyTip = landmarks[20];
-    const pinkyBase = landmarks[17];
-    const pinkyRingDist = Math.sqrt(Math.pow(pinkyTip.x - pinkyBase.x, 2) + Math.pow(pinkyTip.y - pinkyBase.y, 2));
+    const ringTip = landmarks[16];
+    const pinkyRingDist = Math.sqrt(Math.pow(pinkyTip.x - ringTip.x, 2) + Math.pow(pinkyTip.y - ringTip.y, 2));
     
+    // Normalize the distance by the overall hand size to make it scale-invariant
+    const normalizedPinkyDist = handSize > 0 ? pinkyRingDist / handSize : 0;
+
     const wasExtended = handState.isPinkyExtended;
-    handState.isPinkyExtended = pinkyRingDist > 0.08; 
+    // Check if the normalized distance ratio exceeds a threshold. This is much more reliable.
+    handState.isPinkyExtended = normalizedPinkyDist > 0.75; 
 
     if (handState.isPinkyExtended && !wasExtended) {
         console.log("DEBUG: Extended pinky detected. Triggering explosion!");
@@ -347,11 +364,12 @@ class Boid {
         if (handState.explosionTriggered) {
             const explosionPos = attractor.position;
             const dist = this.position.distanceTo(explosionPos);
-            const explosionRadius = 150;
+            const explosionRadius = 500;
 
             if (dist < explosionRadius && dist > 0) {
                 this._tempVec.subVectors(this.position, explosionPos);
                 const falloff = 1 - (dist / explosionRadius);
+                // [FIXED] Significantly increased explosion force for a more dramatic effect
                 const repulsionStrength = boidParams.maxForce * 1000 * falloff; 
                 this._tempVec.setLength(repulsionStrength);
                 this.applyForce(this._tempVec);
